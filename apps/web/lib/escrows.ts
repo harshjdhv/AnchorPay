@@ -27,6 +27,7 @@ export type EscrowRecord = {
   submissionLink: string | null
   createdAt: string
   updatedAt: string
+  fundedAt: string | null
 }
 
 type EscrowStore = Map<string, EscrowRecord>
@@ -157,10 +158,45 @@ export const createEscrow = ({
     submissionLink: null,
     createdAt: now,
     updatedAt: now,
+    fundedAt: null,
   }
 
   escrowStore.set(escrow.id, escrow)
   return escrow
+}
+
+export const fundEscrow = ({
+  escrowId,
+  clientWallet,
+}: {
+  escrowId: string
+  clientWallet: string
+}) => {
+  const escrow = escrowStore.get(escrowId)
+
+  if (!escrow) {
+    return { ok: false as const, reason: "not_found" }
+  }
+
+  if (escrow.clientWallet !== clientWallet) {
+    return { ok: false as const, reason: "forbidden" }
+  }
+
+  if (escrow.status !== "CREATED") {
+    return { ok: false as const, reason: "invalid_state", status: escrow.status }
+  }
+
+  const now = new Date().toISOString()
+  const fundedEscrow: EscrowRecord = {
+    ...escrow,
+    status: "FUNDED",
+    fundedAt: now,
+    updatedAt: now,
+  }
+
+  escrowStore.set(escrowId, fundedEscrow)
+
+  return { ok: true as const, escrow: fundedEscrow }
 }
 
 export const listEscrowsForWallet = (walletAddress: string) => {

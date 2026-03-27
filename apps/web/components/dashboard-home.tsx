@@ -74,6 +74,9 @@ export function DashboardHome({
   const { setVisible } = useWalletModal()
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [selectedRole, setSelectedRole] = useState<UserRole>("CLIENT")
+  const [fundingEscrowId, setFundingEscrowId] = useState<string | null>(null)
+  const [fundActionError, setFundActionError] = useState<string | null>(null)
+  const [fundActionSuccess, setFundActionSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     const persistedRole = window.localStorage.getItem(ROLE_STORAGE_KEY)
@@ -95,6 +98,54 @@ export function DashboardHome({
       ),
     [initialEscrows, selectedRole, walletAddress]
   )
+  const hasWalletMismatch = publicKey ? publicKey.toBase58() !== walletAddress : false
+
+  const handleFundEscrow = async (escrowId: string) => {
+    setFundActionError(null)
+    setFundActionSuccess(null)
+
+    if (!connected || !publicKey) {
+      setFundActionError("Connect wallet before funding escrow")
+      return
+    }
+
+    if (hasWalletMismatch) {
+      setFundActionError(
+        "Connected wallet does not match authenticated session. Logout and sign in again."
+      )
+      return
+    }
+
+    if (selectedRole !== "CLIENT") {
+      setFundActionError("Switch role to Client to fund escrow")
+      return
+    }
+
+    setFundingEscrowId(escrowId)
+
+    try {
+      const response = await fetch(`/api/escrows/${encodeURIComponent(escrowId)}/fund`, {
+        method: "POST",
+      })
+      const body = (await response.json().catch(() => null)) as
+        | {
+            error?: string
+          }
+        | null
+
+      if (!response.ok) {
+        setFundActionError(body?.error ?? "Unable to fund escrow")
+        return
+      }
+
+      setFundActionSuccess(`Escrow ${escrowId} funded. Status moved to FUNDED.`)
+      router.refresh()
+    } catch {
+      setFundActionError("Network error while funding escrow")
+    } finally {
+      setFundingEscrowId(null)
+    }
+  }
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
@@ -177,7 +228,7 @@ export function DashboardHome({
             Wallet connected successfully. Next stage is to let clients create
             escrows and fund USDC directly from this dashboard.
           </p>
-          {publicKey.toBase58() !== walletAddress ? (
+          {hasWalletMismatch ? (
             <p className="mt-2 text-sm text-amber-700">
               Connected wallet differs from authenticated session. Logout and sign
               in again to switch identity.
@@ -265,6 +316,16 @@ export function DashboardHome({
           <h2 className="text-lg font-semibold tracking-tight">
             Escrow Timeline Overview
           </h2>
+          {fundActionError ? (
+            <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {fundActionError}
+            </p>
+          ) : null}
+          {fundActionSuccess ? (
+            <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+              {fundActionSuccess}
+            </p>
+          ) : null}
           {roleEscrows.length === 0 ? (
             <p className="mt-2 text-sm text-zinc-600">
               Escrows will appear here with timeline progress once created.
@@ -324,6 +385,19 @@ export function DashboardHome({
                         )
                       })}
                     </div>
+                    {selectedRole === "CLIENT" &&
+                    escrow.clientWallet === walletAddress &&
+                    escrow.status === "CREATED" ? (
+                      <div className="mt-4">
+                        <Button
+                          className="h-9 rounded-full bg-zinc-950 px-4 text-xs text-white hover:bg-zinc-800"
+                          onClick={() => handleFundEscrow(escrow.id)}
+                          disabled={fundingEscrowId === escrow.id || hasWalletMismatch}
+                        >
+                          {fundingEscrowId === escrow.id ? "Funding..." : "Fund Escrow"}
+                        </Button>
+                      </div>
+                    ) : null}
                   </article>
                 )
               })}
