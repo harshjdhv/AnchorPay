@@ -28,6 +28,10 @@ type EscrowListItem = {
   amount: string
   token: "USDC" | "SOL"
   status: EscrowStatus
+  submissionLink: string | null
+  submissionMessage: string | null
+  submittedAt: string | null
+  releasedAt: string | null
   createdAt: string
 }
 
@@ -49,7 +53,7 @@ const timelineSteps = [
 const statusStepMap: Record<EscrowStatus, number> = {
   CREATED: 1,
   FUNDED: 2,
-  SUBMITTED: 3,
+  SUBMITTED: 4,
   REJECTED: 3,
   DISPUTED: 3,
   COMPLETED: 5,
@@ -61,6 +65,15 @@ const formatDate = (iso: string) =>
     day: "2-digit",
     month: "short",
     year: "numeric",
+  }).format(new Date(iso))
+
+const formatDateTime = (iso: string) =>
+  new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(new Date(iso))
 
 const ROLE_STORAGE_KEY = "trustlock_role"
@@ -75,8 +88,16 @@ export function DashboardHome({
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [selectedRole, setSelectedRole] = useState<UserRole>("CLIENT")
   const [fundingEscrowId, setFundingEscrowId] = useState<string | null>(null)
-  const [fundActionError, setFundActionError] = useState<string | null>(null)
-  const [fundActionSuccess, setFundActionSuccess] = useState<string | null>(null)
+  const [submittingEscrowId, setSubmittingEscrowId] = useState<string | null>(null)
+  const [releasingEscrowId, setReleasingEscrowId] = useState<string | null>(null)
+  const [submitLinkByEscrow, setSubmitLinkByEscrow] = useState<
+    Record<string, string>
+  >({})
+  const [submitMessageByEscrow, setSubmitMessageByEscrow] = useState<
+    Record<string, string>
+  >({})
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null)
 
   useEffect(() => {
     const persistedRole = window.localStorage.getItem(ROLE_STORAGE_KEY)
@@ -101,23 +122,23 @@ export function DashboardHome({
   const hasWalletMismatch = publicKey ? publicKey.toBase58() !== walletAddress : false
 
   const handleFundEscrow = async (escrowId: string) => {
-    setFundActionError(null)
-    setFundActionSuccess(null)
+    setActionError(null)
+    setActionSuccess(null)
 
     if (!connected || !publicKey) {
-      setFundActionError("Connect wallet before funding escrow")
+      setActionError("Connect wallet before funding escrow")
       return
     }
 
     if (hasWalletMismatch) {
-      setFundActionError(
+      setActionError(
         "Connected wallet does not match authenticated session. Logout and sign in again."
       )
       return
     }
 
     if (selectedRole !== "CLIENT") {
-      setFundActionError("Switch role to Client to fund escrow")
+      setActionError("Switch role to Client to fund escrow")
       return
     }
 
@@ -134,16 +155,142 @@ export function DashboardHome({
         | null
 
       if (!response.ok) {
-        setFundActionError(body?.error ?? "Unable to fund escrow")
+        setActionError(body?.error ?? "Unable to fund escrow")
         return
       }
 
-      setFundActionSuccess(`Escrow ${escrowId} funded. Status moved to FUNDED.`)
+      setActionSuccess(`Escrow ${escrowId} funded. Status moved to FUNDED.`)
       router.refresh()
     } catch {
-      setFundActionError("Network error while funding escrow")
+      setActionError("Network error while funding escrow")
     } finally {
       setFundingEscrowId(null)
+    }
+  }
+
+  const handleSubmitWork = async (escrowId: string) => {
+    setActionError(null)
+    setActionSuccess(null)
+
+    if (!connected || !publicKey) {
+      setActionError("Connect wallet before submitting work")
+      return
+    }
+
+    if (hasWalletMismatch) {
+      setActionError(
+        "Connected wallet does not match authenticated session. Logout and sign in again."
+      )
+      return
+    }
+
+    if (selectedRole !== "FREELANCER") {
+      setActionError("Switch role to Freelancer to submit work")
+      return
+    }
+
+    const submissionLink = (submitLinkByEscrow[escrowId] ?? "").trim()
+    const message = (submitMessageByEscrow[escrowId] ?? "").trim()
+
+    if (!submissionLink) {
+      setActionError("Proof link is required")
+      return
+    }
+
+    if (message.length < 10) {
+      setActionError("Submission message must be at least 10 characters")
+      return
+    }
+
+    setSubmittingEscrowId(escrowId)
+
+    try {
+      const response = await fetch(
+        `/api/escrows/${encodeURIComponent(escrowId)}/submit`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            submissionLink,
+            message,
+          }),
+        }
+      )
+      const body = (await response.json().catch(() => null)) as
+        | {
+            error?: string
+          }
+        | null
+
+      if (!response.ok) {
+        setActionError(body?.error ?? "Unable to submit work")
+        return
+      }
+
+      setSubmitLinkByEscrow((previous) => ({
+        ...previous,
+        [escrowId]: "",
+      }))
+      setSubmitMessageByEscrow((previous) => ({
+        ...previous,
+        [escrowId]: "",
+      }))
+      setActionSuccess(`Work submitted for escrow ${escrowId}. Awaiting client review.`)
+      router.refresh()
+    } catch {
+      setActionError("Network error while submitting work")
+    } finally {
+      setSubmittingEscrowId(null)
+    }
+  }
+
+  const handleReleasePayment = async (escrowId: string) => {
+    setActionError(null)
+    setActionSuccess(null)
+
+    if (!connected || !publicKey) {
+      setActionError("Connect wallet before releasing payment")
+      return
+    }
+
+    if (hasWalletMismatch) {
+      setActionError(
+        "Connected wallet does not match authenticated session. Logout and sign in again."
+      )
+      return
+    }
+
+    if (selectedRole !== "CLIENT") {
+      setActionError("Switch role to Client to release payment")
+      return
+    }
+
+    setReleasingEscrowId(escrowId)
+
+    try {
+      const response = await fetch(
+        `/api/escrows/${encodeURIComponent(escrowId)}/release`,
+        {
+          method: "POST",
+        }
+      )
+      const body = (await response.json().catch(() => null)) as
+        | {
+            error?: string
+          }
+        | null
+
+      if (!response.ok) {
+        setActionError(body?.error ?? "Unable to release payment")
+        return
+      }
+
+      setActionSuccess(`Payment released for escrow ${escrowId}. Status moved to COMPLETED.`)
+      router.refresh()
+    } catch {
+      setActionError("Network error while releasing payment")
+    } finally {
+      setReleasingEscrowId(null)
     }
   }
 
@@ -316,14 +463,14 @@ export function DashboardHome({
           <h2 className="text-lg font-semibold tracking-tight">
             Escrow Timeline Overview
           </h2>
-          {fundActionError ? (
+          {actionError ? (
             <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {fundActionError}
+              {actionError}
             </p>
           ) : null}
-          {fundActionSuccess ? (
+          {actionSuccess ? (
             <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-              {fundActionSuccess}
+              {actionSuccess}
             </p>
           ) : null}
           {roleEscrows.length === 0 ? (
@@ -385,6 +532,36 @@ export function DashboardHome({
                         )
                       })}
                     </div>
+                    {escrow.submissionLink ? (
+                      <div className="mt-4 rounded-lg border border-zinc-200 bg-white p-3">
+                        <p className="text-[11px] font-semibold tracking-[0.08em] text-zinc-500 uppercase">
+                          Submission Proof
+                        </p>
+                        <p className="mt-2 text-xs">
+                          <a
+                            href={escrow.submissionLink}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="text-zinc-900 underline decoration-zinc-400 underline-offset-4"
+                          >
+                            {escrow.submissionLink}
+                          </a>
+                        </p>
+                        {escrow.submissionMessage ? (
+                          <p className="mt-2 text-xs text-zinc-700">{escrow.submissionMessage}</p>
+                        ) : null}
+                        {escrow.submittedAt ? (
+                          <p className="mt-2 text-[11px] text-zinc-500">
+                            Submitted: {formatDateTime(escrow.submittedAt)}
+                          </p>
+                        ) : null}
+                        {escrow.releasedAt ? (
+                          <p className="mt-1 text-[11px] text-emerald-700">
+                            Released: {formatDateTime(escrow.releasedAt)}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {selectedRole === "CLIENT" &&
                     escrow.clientWallet === walletAddress &&
                     escrow.status === "CREATED" ? (
@@ -395,6 +572,61 @@ export function DashboardHome({
                           disabled={fundingEscrowId === escrow.id || hasWalletMismatch}
                         >
                           {fundingEscrowId === escrow.id ? "Funding..." : "Fund Escrow"}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {selectedRole === "FREELANCER" &&
+                    escrow.freelancerWallet === walletAddress &&
+                    escrow.status === "FUNDED" ? (
+                      <div className="mt-4 space-y-3 rounded-lg border border-zinc-200 bg-white p-3">
+                        <p className="text-xs font-medium text-zinc-700">
+                          Submit work proof for client review
+                        </p>
+                        <input
+                          className="h-9 w-full rounded-md border border-zinc-300 px-3 text-xs outline-none ring-zinc-900 transition focus:ring-2"
+                          placeholder="https://github.com/... or https://figma.com/..."
+                          value={submitLinkByEscrow[escrow.id] ?? ""}
+                          onChange={(event) =>
+                            setSubmitLinkByEscrow((previous) => ({
+                              ...previous,
+                              [escrow.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <textarea
+                          className="min-h-20 w-full rounded-md border border-zinc-300 px-3 py-2 text-xs outline-none ring-zinc-900 transition focus:ring-2"
+                          placeholder="Completed features, deployment links, and notes."
+                          value={submitMessageByEscrow[escrow.id] ?? ""}
+                          onChange={(event) =>
+                            setSubmitMessageByEscrow((previous) => ({
+                              ...previous,
+                              [escrow.id]: event.target.value,
+                            }))
+                          }
+                        />
+                        <Button
+                          className="h-9 rounded-full bg-zinc-950 px-4 text-xs text-white hover:bg-zinc-800"
+                          onClick={() => handleSubmitWork(escrow.id)}
+                          disabled={submittingEscrowId === escrow.id || hasWalletMismatch}
+                        >
+                          {submittingEscrowId === escrow.id
+                            ? "Submitting..."
+                            : "Submit Work"}
+                        </Button>
+                      </div>
+                    ) : null}
+                    {selectedRole === "CLIENT" &&
+                    escrow.clientWallet === walletAddress &&
+                    escrow.status === "SUBMITTED" ? (
+                      <div className="mt-4 flex flex-wrap items-center gap-2">
+                        <Button
+                          className="h-9 rounded-full bg-zinc-950 px-4 text-xs text-white hover:bg-zinc-800"
+                          onClick={() => handleReleasePayment(escrow.id)}
+                          disabled={releasingEscrowId === escrow.id || hasWalletMismatch}
+                        >
+                          {releasingEscrowId === escrow.id
+                            ? "Releasing..."
+                            : "Approve & Release Payment"}
                         </Button>
                       </div>
                     ) : null}

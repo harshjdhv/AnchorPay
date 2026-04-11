@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth"
-import { fundEscrow } from "@/lib/escrows"
+import { releasePayment } from "@/lib/escrows"
 
 type RouteContext = {
   params: Promise<{
@@ -24,28 +24,28 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Escrow id is required" }, { status: 400 })
   }
 
-  const funded = await fundEscrow({
+  const released = await releasePayment({
     escrowId,
     clientWallet: session.walletAddress,
   })
 
-  if (!funded.ok) {
-    if (funded.reason === "not_found") {
+  if (!released.ok) {
+    if (released.reason === "not_found") {
       return NextResponse.json({ error: "Escrow not found" }, { status: 404 })
     }
 
-    if (funded.reason === "forbidden") {
+    if (released.reason === "forbidden") {
       return NextResponse.json(
-        { error: "Only escrow client can fund this escrow" },
+        { error: "Only escrow client can release payment for this escrow" },
         { status: 403 }
       )
     }
 
     return NextResponse.json(
-      { error: `Escrow cannot be funded from status ${funded.status}` },
+      { error: `Payment cannot be released from status ${released.status}` },
       { status: 409 }
     )
   }
 
-  return NextResponse.json({ escrow: funded.escrow })
+  return NextResponse.json({ escrow: released.escrow })
 }

@@ -1,4 +1,7 @@
 import { PublicKey } from "@solana/web3.js"
+import { type Escrow as PrismaEscrow } from "@prisma/client"
+
+import { prisma } from "@/lib/prisma"
 
 export const ESCROW_TOKENS = ["USDC", "SOL"] as const
 export type EscrowToken = (typeof ESCROW_TOKENS)[number]
@@ -25,21 +28,12 @@ export type EscrowRecord = {
   status: EscrowStatus
   deadline: string | null
   submissionLink: string | null
+  submissionMessage: string | null
   createdAt: string
   updatedAt: string
   fundedAt: string | null
-}
-
-type EscrowStore = Map<string, EscrowRecord>
-
-declare global {
-  var __trustlockEscrowStore: EscrowStore | undefined
-}
-
-const escrowStore: EscrowStore = globalThis.__trustlockEscrowStore ?? new Map()
-
-if (!globalThis.__trustlockEscrowStore) {
-  globalThis.__trustlockEscrowStore = escrowStore
+  submittedAt: string | null
+  releasedAt: string | null
 }
 
 export type CreateEscrowInput = {
@@ -49,6 +43,11 @@ export type CreateEscrowInput = {
   amount: string
   token: EscrowToken
   deadline: string | null
+}
+
+export type SubmitWorkInput = {
+  submissionLink: string
+  message: string
 }
 
 const normalizeSpace = (value: string) => value.trim().replace(/\s+/g, " ")
@@ -68,6 +67,39 @@ const parseAmount = (value: string) => {
 }
 
 const isIsoDate = (value: string) => !Number.isNaN(Date.parse(value))
+
+const validateSubmissionLink = (value: string) => {
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null
+    }
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+const toEscrowRecord = (escrow: PrismaEscrow): EscrowRecord => {
+  return {
+    id: escrow.id,
+    projectTitle: escrow.projectTitle,
+    description: escrow.description,
+    clientWallet: escrow.clientWallet,
+    freelancerWallet: escrow.freelancerWallet,
+    amount: escrow.amount.toString(),
+    token: escrow.token,
+    status: escrow.status,
+    deadline: escrow.deadline?.toISOString() ?? null,
+    submissionLink: escrow.submissionLink,
+    submissionMessage: escrow.submissionMessage,
+    createdAt: escrow.createdAt.toISOString(),
+    updatedAt: escrow.updatedAt.toISOString(),
+    fundedAt: escrow.fundedAt?.toISOString() ?? null,
+    submittedAt: escrow.submittedAt?.toISOString() ?? null,
+    releasedAt: escrow.releasedAt?.toISOString() ?? null,
+  }
+}
 
 export const validateCreateEscrowInput = (rawInput: unknown) => {
   if (!rawInput || typeof rawInput !== "object") {
@@ -137,42 +169,72 @@ export const validateCreateEscrowInput = (rawInput: unknown) => {
   }
 }
 
-export const createEscrow = ({
+export const validateSubmitWorkInput = (rawInput: unknown) => {
+  if (!rawInput || typeof rawInput !== "object") {
+    return { ok: false as const, error: "Invalid request body" }
+  }
+
+  const input = rawInput as Partial<SubmitWorkInput>
+  const submissionLink = validateSubmissionLink((input.submissionLink ?? "").trim())
+  const message = normalizeSpace(input.message ?? "")
+
+  if (!submissionLink) {
+    return {
+      ok: false as const,
+      error: "Submission link must be a valid http(s) URL",
+    }
+  }
+
+  if (message.length < 10 || message.length > 1500) {
+    return {
+      ok: false as const,
+      error: "Message must be between 10 and 1500 characters",
+    }
+  }
+
+  return {
+    ok: true as const,
+    input: {
+      submissionLink,
+      message,
+    },
+  }
+}
+
+export const createEscrow = async ({
   clientWallet,
   input,
 }: {
   clientWallet: string
   input: CreateEscrowInput
 }) => {
-  const now = new Date().toISOString()
-  const escrow: EscrowRecord = {
-    id: `esc_${crypto.randomUUID()}`,
-    projectTitle: input.projectTitle,
-    description: input.description,
-    clientWallet,
-    freelancerWallet: input.freelancerWallet,
-    amount: input.amount,
-    token: input.token,
-    status: "CREATED",
-    deadline: input.deadline,
-    submissionLink: null,
-    createdAt: now,
-    updatedAt: now,
-    fundedAt: null,
-  }
+  const created = await prisma.escrow.create({
+    data: {
+      id: `esc_${crypto.randomUUID()}`,
+      projectTitle: input.projectTitle,
+      description: input.description,
+      clientWallet,
+      freelancerWallet: input.freelancerWallet,
+      amount: input.amount,
+      token: input.token,
+      status: "CREATED",
+      deadline: input.deadline ? new Date(input.deadline) : null,
+    },
+  })
 
-  escrowStore.set(escrow.id, escrow)
-  return escrow
+  return toEscrowRecord(created)
 }
 
-export const fundEscrow = ({
+export const fundEscrow = async ({
   escrowId,
   clientWallet,
 }: {
   escrowId: string
   clientWallet: string
 }) => {
-  const escrow = escrowStore.get(escrowId)
+  const escrow = await prisma.escrow.findUnique({
+    where: { id: escrowId },
+  })
 
   if (!escrow) {
     return { ok: false as const, reason: "not_found" }
@@ -186,25 +248,104 @@ export const fundEscrow = ({
     return { ok: false as const, reason: "invalid_state", status: escrow.status }
   }
 
-  const now = new Date().toISOString()
-  const fundedEscrow: EscrowRecord = {
-    ...escrow,
-    status: "FUNDED",
-    fundedAt: now,
-    updatedAt: now,
-  }
+  const now = new Date()
+  const fundedEscrow = await prisma.escrow.update({
+    where: { id: escrowId },
+    data: {
+      status: "FUNDED",
+      fundedAt: now,
+    },
+  })
 
-  escrowStore.set(escrowId, fundedEscrow)
-
-  return { ok: true as const, escrow: fundedEscrow }
+  return { ok: true as const, escrow: toEscrowRecord(fundedEscrow) }
 }
 
-export const listEscrowsForWallet = (walletAddress: string) => {
-  return Array.from(escrowStore.values())
-    .filter(
-      (escrow) =>
-        escrow.clientWallet === walletAddress ||
-        escrow.freelancerWallet === walletAddress
-    )
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+export const submitWork = async ({
+  escrowId,
+  freelancerWallet,
+  input,
+}: {
+  escrowId: string
+  freelancerWallet: string
+  input: SubmitWorkInput
+}) => {
+  const escrow = await prisma.escrow.findUnique({
+    where: { id: escrowId },
+  })
+
+  if (!escrow) {
+    return { ok: false as const, reason: "not_found" }
+  }
+
+  if (escrow.freelancerWallet !== freelancerWallet) {
+    return { ok: false as const, reason: "forbidden" }
+  }
+
+  if (escrow.status !== "FUNDED") {
+    return { ok: false as const, reason: "invalid_state", status: escrow.status }
+  }
+
+  const now = new Date()
+  const submittedEscrow = await prisma.escrow.update({
+    where: { id: escrowId },
+    data: {
+      status: "SUBMITTED",
+      submissionLink: input.submissionLink,
+      submissionMessage: input.message,
+      submittedAt: now,
+    },
+  })
+
+  return { ok: true as const, escrow: toEscrowRecord(submittedEscrow) }
+}
+
+export const releasePayment = async ({
+  escrowId,
+  clientWallet,
+}: {
+  escrowId: string
+  clientWallet: string
+}) => {
+  const escrow = await prisma.escrow.findUnique({
+    where: { id: escrowId },
+  })
+
+  if (!escrow) {
+    return { ok: false as const, reason: "not_found" }
+  }
+
+  if (escrow.clientWallet !== clientWallet) {
+    return { ok: false as const, reason: "forbidden" }
+  }
+
+  if (escrow.status !== "SUBMITTED") {
+    return { ok: false as const, reason: "invalid_state", status: escrow.status }
+  }
+
+  const now = new Date()
+  const completedEscrow = await prisma.escrow.update({
+    where: { id: escrowId },
+    data: {
+      status: "COMPLETED",
+      releasedAt: now,
+    },
+  })
+
+  return { ok: true as const, escrow: toEscrowRecord(completedEscrow) }
+}
+
+export const listEscrowsForWallet = async (walletAddress: string) => {
+  const escrows = await prisma.escrow.findMany({
+    where: {
+      OR: [
+        { clientWallet: walletAddress },
+        { freelancerWallet: walletAddress },
+      ],
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  })
+
+  return escrows.map(toEscrowRecord)
 }

@@ -14,7 +14,7 @@ export default async function DashboardPage() {
     redirect("/")
   }
 
-  const escrows = listEscrowsForWallet(session.walletAddress)
+  const escrows = await listEscrowsForWallet(session.walletAddress)
 
   return (
     <DashboardHome walletAddress={session.walletAddress} initialEscrows={escrows} />

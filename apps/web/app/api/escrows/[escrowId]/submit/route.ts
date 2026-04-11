@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth"
-import { fundEscrow } from "@/lib/escrows"
+import { submitWork, validateSubmitWorkInput } from "@/lib/escrows"
 
 type RouteContext = {
   params: Promise<{
@@ -24,28 +24,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Escrow id is required" }, { status: 400 })
   }
 
-  const funded = await fundEscrow({
+  const body = await request.json().catch(() => null)
+  const validation = validateSubmitWorkInput(body)
+
+  if (!validation.ok) {
+    return NextResponse.json({ error: validation.error }, { status: 400 })
+  }
+
+  const submitted = await submitWork({
     escrowId,
-    clientWallet: session.walletAddress,
+    freelancerWallet: session.walletAddress,
+    input: validation.input,
   })
 
-  if (!funded.ok) {
-    if (funded.reason === "not_found") {
+  if (!submitted.ok) {
+    if (submitted.reason === "not_found") {
       return NextResponse.json({ error: "Escrow not found" }, { status: 404 })
     }
 
-    if (funded.reason === "forbidden") {
+    if (submitted.reason === "forbidden") {
       return NextResponse.json(
-        { error: "Only escrow client can fund this escrow" },
+        { error: "Only escrow freelancer can submit work for this escrow" },
         { status: 403 }
       )
     }
 
     return NextResponse.json(
-      { error: `Escrow cannot be funded from status ${funded.status}` },
+      { error: `Work cannot be submitted from status ${submitted.status}` },
       { status: 409 }
     )
   }
 
-  return NextResponse.json({ escrow: funded.escrow })
+  return NextResponse.json({ escrow: submitted.escrow })
 }

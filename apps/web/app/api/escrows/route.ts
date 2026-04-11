@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const escrows = listEscrowsForWallet(session.walletAddress)
+  const escrows = await listEscrowsForWallet(session.walletAddress)
   return NextResponse.json({ escrows })
 }
 
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const escrow = createEscrow({
+  const escrow = await createEscrow({
     clientWallet: session.walletAddress,
     input: validation.input,
   })

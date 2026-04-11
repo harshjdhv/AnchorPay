@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum EscrowToken {
+  USDC
+  SOL
+}
+
+enum EscrowStatus {
+  CREATED
+  FUNDED
+  SUBMITTED
+  REJECTED
+  DISPUTED
+  COMPLETED
+  REFUNDED
+}
+
+model Escrow {
+  id                String       @id @default(cuid())
+  projectTitle      String
+  description       String
+  clientWallet      String
+  freelancerWallet  String
+  amount            Decimal      @db.Decimal(20, 9)
+  token             EscrowToken
+  status            EscrowStatus @default(CREATED)
+  deadline          DateTime?
+  submissionLink    String?
+  submissionMessage String?
+  fundedAt          DateTime?
+  submittedAt       DateTime?
+  releasedAt        DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([clientWallet, createdAt(sort: Desc)])
+  @@index([freelancerWallet, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+}
